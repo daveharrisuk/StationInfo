@@ -1,175 +1,135 @@
-// StationInfo.ino
-//---------------------------------------------------------------
+/// @file StationInfo.ino
+///
+/// @brief Display a timetable on Station Info TFT screen
+///
+/// @author (c) Dave Harris
+/// @date started Aug-2019
+///
+/// @date last edit 19-Apr-2022
+/// @version 0.61
+///
   
-#define ABOUT "StationInfo.ino\n(c)Dave Harris v0.2 Sep19\nBuild "__DATE__" "__TIME__ 
+const char ABOUT[] = "StationInfo\n(c)Dave Harris v0.61 Apr22\n";
 
-// IDE:   Arduino v1.8.9
-// Board: Arduino Nano 3
-// uPC:   ATmega329P (Old Bootloader)
+// IDE:   Arduino v1.8.13
+// Board: Arduino Nano v3 (use Old Bootloader)
+// uPC:   ATmega329P
 // IDE Serial: 9600 baud. Disgnostic messages.
-// Screen: 0.96" TFT 80x160 RGB565 colour, SPI, with ST7735S controller (china clone)
-
+// Screen: 0.96" TFT 80x160 65k colour, SPI, ST7735S chip, china clone.
+//           VCC pin is 3.3V from Nano
 
 /* Compile time stats...
-Sketch uses 16724 bytes (54%) of program storage space. Maximum is 30720 bytes.
-Global variables use 803 bytes (39%) of dynamic memory, leaving 1245 bytes for local variables.
+Sketch uses 17240 bytes (56%) of program storage space.
+Maximum is 30720 bytes.
+Global variables use 750 bytes (36%) of dynamic memory
+, leaving 1298 bytes for local variables. Maximum is 2048 bytes.
 */
 
-#include "StationInfo.h"  // message array, mTable[] and timetable array, tt[]
+
+// local project files
+
+#include "StationInfo.h"    // data defines
+
+#include "TTdata.h"         // Timetable data
 
 
 // Libraries
 
-#include <SPI.h>             // 1.0    \arduino\avr\libraries\SPI 
-#include <Adafruit_GFX.h>    // 1.5.6  https://github.com/adafruit/Adafruit-GFX-Library
-#include <Adafruit_ST7735.h> // 1.4.3  https://github.com/adafruit/Adafruit-ST7735-Library
+#include<SPI.h>             // 1.0   \arduino\avr\libraries\SPI
+
+#include<Adafruit_GFX.h>    // 1.10.10 github.com/adafruit/Adafruit-GFX-Library
+
+#include<Adafruit_ST7735.h> // 1.9.3  github.com/adafruit/Adafruit-ST7735-Library
+
+
+Adafruit_ST7735 tft = Adafruit_ST7735( PIN_TFTCS, PIN_TFTDC, PIN_TFTRST );
 
 
 
-//------Arduino Nano / AtMega328P pin defines-------------
+//-------------------------------------------------------------------
+/// @brief getMessageString
+///  Extract string from PROGMEM string store
+///
+/// @param index [in]  message table index
+/// @return pointer to string
+///
 
-// Pins to or from ST7735S screen [0.96"80x160(RGB)IPS] RGB565 16K colour
-#define TFT_DC   8
-#define TFT_RST  9
-#define TFT_CS  10
-// h/w SPI  SDA 11
-// h/w SPI  SCL 13
-// VCC on 3.3V
-
-
-//---------Screen object----------------
-
-Adafruit_ST7735 tft = Adafruit_ST7735( TFT_CS, TFT_DC, TFT_RST );
-
-// Clone screen colours vary from library defines. Red & Blue are swapped!
-// Redefined...
-#define C_RED    0x001F
-#define C_BLUE   0xF800
-#define C_GREEN  0x07E0
-#define C_YELLOW 0x07FF
-#define C_BLACK  0x0000
-#define C_WHITE  0xFFFF
-#define C_GREY   0xCE59
-// lightgrey 0x7BEF
-
-
-//-----------global variables----------------
-
-
-uint8_t ttIndex = 16; // train at top of the display
-
-uint8_t ttElements;   // number of tt elements
-
-uint16_t ttMins;      // time of top train on display
-                      // Will be >= fastClockMins +1
-
-volatile uint16_t fastClockMins = 570; 
-volatile boolean  clockFlag = false;
-
-
-#define MINUTES24HOURS  1440
-
-
-
-
-//---------------getMessageString-------------------------
-
-char * getMessageString( byte index ) {  // See StationInfo.h
-  
-  //params...
-  // index: table index
-  //return: string from the message table
-
+char * getMessageString( uint8_t index )
+{ 
   static char msg[25];
 
   strcpy_P( msg, ( ( char* )pgm_read_word( & mTable[index] ) ) );
-  return msg;
+  return  msg;
 }
 
 
-//-------------getMinsFromHHMM-------------------
 
-uint16_t getMinsFromHHMM( char hhmm[] ) {
+//-------------------------------------------------------------------
+/// @brief getHHMMfromMins
+///  Convert time of day minutes to time string
+/// 
+/// @param mins [in] Time of day in minutes. 1439 is 23:59
+/// @return string pointer
+///
 
-  // Convert time string to time of day minutes
+char * getHHMMfromMins( uint16_t mins ) 
+{
+  static char t[ 6 ]; // HH:MM + end null = 6 char
   
-  //params...
-  // hhmm: time of day "hh:mm" string, 24 hour clock
-  //return: time of day in minutes
-
-  uint16_t mins = ( hhmm[ 0 ] - '0' ) * 600; // tens hour
-  mins += ( ( hhmm[ 1 ] - '0' ) * 60 );     // hour 
-  mins += ( ( hhmm[ 3 ] - '0' ) * 10 );    // tens minute
-  mins += ( hhmm[ 4 ] - '0' );            // minute
-
-  return mins;
-}
-
-
-//------------getHHMMfromMins------------------
-
-char * getHHMMfromMins( uint16_t mins ) {
-
-  // Convert time of day minutes to time string
-  
-  //params...
-  // mins: time of day in minutes. 0 is 00:00, 1439 is 23:59
-  //return: string
-
-  static char t[6]; // HH:MM +null = 6 char
-  
-  sprintf( t, "%02d:%02d", mins / 60, mins % 60 );
+  sprintf( t, "%02d:%02d", (mins/60), (mins%60) );
   return t;
 }
 
 
-//-------------updateTTindex--------------------
 
-boolean updateTTindex( void ) {
+//-------------------------------------------------------------------
+/// @brief isTTindexUpdated
+///  Scan the TT to see if update needed 
+///
+/// @param none
+/// @return true if updated
+///
 
-  // 
+boolean isTTindexUpdated() 
+{
+  for( uint8_t indx = 0; indx <= ttElements; indx++ )
+  {
+    if( tt[ indx ].minute > fastClockMins )
+    {
+      if( indx != ttIndex )
+      {
+        Serial.print( indx, DEC );
+        Serial.print("indx");
+        Serial.println( getHHMMfromMins( tt[indx].minute ) );
 
-  //params none, returns true if updated
-
-  for( uint8_t index = 0; index <= ttElements; index++ ) {
-
-    if( tt[index].minute > fastClockMins ) {
-      
-      if( index != ttIndex ) {
-
-        Serial.print( index, DEC );
-        Serial.print( " index TT=" );
-        Serial.println( getHHMMfromMins( tt[index].minute ) );
-
-        ttIndex = index;
+        ttIndex = indx;
         return true;
       }
-      else {
-         
+      else 
+      {
          return false;
       }
     }
   }
   ttIndex = 0;
-  Serial.println( ".0 index TT=" );
-  Serial.println( getHHMMfromMins( tt[0].minute ) );
-  
+  Serial.println("0indx");
   return true;
 }
 
 
-//-------------displayStatus---------------------
 
-void displayStatus( String text, uint16_t colour ) {
+//-------------------------------------------------------------------
+/// @brief displayStatus
+///  Display status text at bottom row of TFT screen
+///
+/// @param text [in] String array of 25 chars
+/// @param colour [in] The RGB565 colour code
+/// @return none
+///
 
-  // Display status text at bottom of tft screen
-
-  //params...
-  // text:   string of 25 chars
-  // colour: RGB565 code
-  //return: none
-
-  tft.fillRect( 0, tft.height() -9, tft.width(), 9, C_BLUE ); // blank area
+void displayStatus( String text, uint16_t colour ) 
+{
+  tft.fillRect( 2, tft.height() -9, tft.width(), 9, COLOR_BLUE ); // blank area
   
   tft.setTextColor( colour ); 
 
@@ -178,205 +138,240 @@ void displayStatus( String text, uint16_t colour ) {
 }
 
 
-//-------------displayTTrow----------------------
 
-void displayTTrow( uint8_t row, uint8_t index ) {
 
-  // Display one row of timetable on screen
+//-------------------------------------------------------------------
+/// @brief displayTTrow
+///  Display one row of timetable on screen
+///
+/// @param row [in] The row number, 0 to 5
+/// @param index [in] The index into timetable
+/// @return none
+///
 
-  //params...
-  // row:   row number, 0 to 5
-  // index: index to timetable
-  //return: none
+void displayTTrow( uint8_t row, uint8_t index ) 
+{
+  uint8_t  y = 19 + ( row * 10 ); // calculate row vertical position
 
-  uint8_t  y = 17 + ( row * 10 ); // calculate row vertical position
-
-  tft.fillRect( 0, y, tft.width(), 10, C_BLUE ); // blank area
+  tft.fillRect( 0, y, tft.width(), 10, COLOR_BLUE ); // blank area
   
-  tft.setTextColor( C_WHITE );
+  tft.setTextColor( COLOR_WHITE );
   
-  tft.setCursor( 1, y ); // time
+  tft.setCursor( 4, y ); // time
   tft.print( getHHMMfromMins( tt[index].minute ) );
  
-  tft.setCursor( 35, y ); // platform number
+  tft.setCursor( 39, y ); // platform number
   tft.print( tt[index].platform, DEC );
   
-  tft.setCursor( 45, y ); // description
+  tft.setCursor( 49, y ); // description
   tft.print( getMessageString( tt[index].message ) );
 }
 
 
-//-------------DisplayTimeTable-----------------
 
-void displayTimeTable( void ) {
 
-  // Display 5 rows of time table, starting at ttIndex
+//-------------------------------------------------------------------
+/// @brief DisplayTimeTable
+///  Display 5 rows of time table, starting at ttIndex
+///
+/// @param  none
+/// @return none
+///
 
-  //params none, returns nothing
-
-  #define NUMROWS 5
+void displayTimeTable() 
+{
+  const uint8_t NUMROWS = 5;
   
-  ttMins = tt[ttIndex].minute; // top of display time
+  ttMins = tt[ ttIndex ].minute; // top of display time
    
   uint8_t index = ttIndex;
    
-  for( uint8_t row = 0; row < NUMROWS; row++ ) {
-    
+  for( uint8_t row = 0; row < NUMROWS; row++ )
+  {
     displayTTrow( row, index );
     
-    if( ++index >= ttElements ) {
-      
+    if( ++index >= ttElements )
+    {
       index = 0;
     }
   }
 }
 
 
-//-------------displayTimeOfDay------------------
 
-void displayTimeOfDay( void ) {
 
-  //Display time of day clock at top right of tft screen
-   
-  //params none, returns nothing.
+//-------------------------------------------------------------------
+/// @brief displayTimeOfDay
+///  Display time of day clock at top right of screen
+///
+/// @param  none
+/// @return none
+///
 
-  tft.setTextColor( C_WHITE, C_BLUE );
+void displayTimeOfDay()
+{
+  tft.setTextColor( COLOR_WHITE, COLOR_BLUE );
   
-  tft.setCursor( tft.width() -32, 3 );
-  tft.print( getHHMMfromMins(  fastClockMins ) );
+  tft.setCursor( tft.width() -32, 5 );
+  tft.print( getHHMMfromMins( fastClockMins ) );
 }
 
-//--------------displayHeader-----------------------
 
-void displayHeader( void ) {
 
-  //Display header row on screen
-  
-  //params none, returns nothing.
+//-------------------------------------------------------------------
+/// @brief displayLogo
+///  Display DB logo on screen
+///  
+/// @param  none
+/// @return none
+///
 
-  tft.setCursor( 3, 3 );
+void displayLogo()
+{
+  tft.fillRect( 105, 3, 16, 11, COLOR_RED );
+  tft.drawRoundRect( 105, 2, 17, 12, 1, COLOR_WHITE );
+  tft.setTextColor( COLOR_WHITE ); 
+  tft.setCursor( 108, 4 );
+  tft.print( "DB" );  
+}
+
+
+
+//-------------------------------------------------------------------
+/// @brief displayHeader
+///  Display header row on screen
+///
+///@param  none
+///@return none
+///
+
+void displayHeader() 
+{
+  tft.setCursor( 5, 5 );
   tft.print( getMessageString( M_HEADER) );
   
-  tft.drawFastHLine( 0, 12, tft.width(), C_GREY );  
-  tft.drawFastHLine( 0, tft.height() -13, tft.width(), C_GREY );
-
-  tft.fillRect( 105, 1, 16, 10, C_RED ); // DB logo
-  tft.drawRoundRect( 105, 0, 17, 11, 1, C_WHITE );
-  tft.setTextColor( C_WHITE ); 
-  tft.setCursor( 108, 2 );
-  tft.print( "DB" );
-
-  tft.setCursor( tft.width() -32, 3 );
-  tft.print( "hh:mm" );
+  tft.drawFastHLine( 2, 16, tft.width(), COLOR_GREY );  
+  tft.drawFastHLine( 2, tft.height() -11, tft.width(), COLOR_GREY );
 }
 
 
-//--------------initScreen-----------------------
 
-void initScreen( void ) {
+//-------------------------------------------------------------------
+/// @brief initScreen
+///  Initialise tft screen and layout
+///
+/// @param  none
+/// @return none
+///
 
-  // initialise tft screen and layout
-  
-  //params none, returns nothing.
-
+void initScreen() 
+{
   tft.initR( INITR_MINI160x80 );
 
-  tft.fillScreen( C_BLUE ); // blank screen
+  tft.fillScreen( COLOR_BLUE ); // blank screen
   tft.setRotation( 3 );
+  
   tft.setTextSize( 1 );
   tft.setTextWrap( false );
   
-  tft.setTextColor( C_WHITE );
-  tft.setCursor( 0, 30 );
-  tft.print( ABOUT ); // title, author, version
+  tft.setTextColor( COLOR_WHITE );
+  tft.setCursor( 4, 30 );
+  tft.println( ABOUT ); // title, author, version
+  tft.print("DataVersion=");
+  tft.print( dataVersion );
+  
   delay( 1000 );
 
-  tft.fillScreen( C_BLUE );
+  tft.fillScreen( COLOR_BLUE );
   tft.setTextWrap( false );
-  tft.setTextColor( C_WHITE );
      
   displayHeader();
-  
+  displayLogo();
   displayTimeTable(); 
-  
-  displayStatus( getMessageString( M_NODELAYS ), C_GREEN );
+  displayStatus( getMessageString( M_NODELAYS ), COLOR_GREEN );
 }
 
 
-//-------------------setup--------------------------------------
+//-------------------------------------------------------------------
+/// @brief setup
+///  first call at boot time
+///
+/// @param  none
+/// @return none
+///
 
-void setup( void ) {
-
-  // Arduino calls this first at boot time
-  
-  //params none, returns nothing.
-
+void setup() 
+{
   Serial.begin( 9600 );
-  Serial.println( ABOUT );
+  Serial.print( ABOUT );
+  Serial.print("DataVersion=");
+  Serial.println( dataVersion );
+
+
+  noInterrupts();   // stop interrupts for timer setup
+  {                     // Timer1 is 16 bit timer              
+    TCCR1A = B00000000; // all 0 = no toggling pins
+    TCCR1B = B00001100; // bit2 is clk div 256, so 16MHz/256 = 62.5KHz
+    TIMSK1 = B00000010; // bit1 is interrupt on OCR1A match
+    OCR1A  = 62500;     // comparator, one second per tick
+  }
+  interrupts();     // restart interrupts
 
   ttElements = buildTimeTable();
-  
-  Serial.print( ttElements, DEC );
-  Serial.print( " timetable elements loaded, max size=" );
-  Serial.println( sizeof( tt ) / 4, DEC );
 
+  Serial.print("tt index ");
+  Serial.println( ttElements, DEC );
 
-  noInterrupts(); // stop interrupts for timer setup
-  
-                      // Timer1 is only 16 bit timer
-  TCCR1A = B00000000; // all 0 = no toggling pins
-  TCCR1B = B00001100; // bit2 is clk div 256, so 16MHz/256 = 62.5KHz
-  TIMSK1 = B00000010; // bit1 is interrupt on OCR1A match
-  OCR1A  = 62500;     // comparator, one second per tick
-
-  interrupts(); // restart interrupts
-
-  
   initScreen();
 }
 
 
-//-------Timer1 compare match interrupt service routine---------
 
-ISR( TIMER1_COMPA_vect ) {
+//-------------------------------------------------------------------
+/// @brief ISR TIMER1_COMPA_vect
+///  Timer1 compare match interrupt service routine, each second
+///
+/// @param  [in] InterruptVector
+/// @return none
+///
 
-  // Interrupt each second
+ISR( TIMER1_COMPA_vect )
+{
+  static uint8_t countSeconds; // one second clock tick
 
-  //params none, returns nothing.
-
-  static uint8_t  countSeconds; // one second clock tick
-
-  if( ++countSeconds > SECONDSPERMINUTE ) { // Fast clock tick?
-    
+  if( ++countSeconds > SECONDSPERMINUTE ) // Fast clock tick?
+  {
+    clockFlag = true;    // global clockflag is reset in loop()
     countSeconds = 0;
 
-    if( ++fastClockMins >= MINUTES24HOURS ) { // past 23:59?
-      
+    if( ++fastClockMins >= MINUTES24HOURS ) // past 23:59?
+    {
       fastClockMins = 0; // reset Fast clock 
     }
-    clockFlag = true;
   }
 }
 
 
-//--------------loop----------------------------------------------------
 
-void loop( void ) {
-  
-  //Arduino calls after setup() finishes. Is re-called when ends.
-  
-  //params none, returns nothing.
+//-------------------------------------------------------------------
+/// @brief loop
+///  called after setup
+///
+/// @params none
+/// @return none
+///
 
-  if( clockFlag ) { // clockFlag set by ISR
-
+void loop() 
+{
+  if( clockFlag ) // clockFlag set by ISR
+  {
     clockFlag = false;
     displayTimeOfDay();
     
-    if( updateTTindex() ) {
-      
+    if( isTTindexUpdated() )
+    {
       displayTimeTable();
     }
-    Serial.println( getHHMMfromMins(  fastClockMins ) );
   }
 }
 
